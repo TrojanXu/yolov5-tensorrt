@@ -14,4 +14,4 @@ Add newly implemented upsample to get this working with current combination of o
 # limitation
 - [ ] NMS is not included yet
 - [ ] No dynamic shape nor dynamic batchsize is implemented yet
-- [ ] Numerical result is not validated
+- [x] <s>Numerical result is not validated</s>

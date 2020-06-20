@@ -3,16 +3,28 @@ sys.path.append('yolov5')
 
 from models.common import *
 from utils.torch_utils import *
+from utils.datasets import *
 from yolo import *
 import tensorrt as trt
 import pycuda.driver as cuda
 import pycuda.autoinit
 import time
+import copy
+import numpy as np
+import os
+from onnxsim import simplify
+import onnx
 
 device = torch_utils.select_device('0')
 weights = 'yolov5s.pt'
 TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 EXPLICIT_BATCH = 1 << (int)(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
+image_loader = LoadImages('yolov5/inference/images', img_size=640)
+image_loader.__iter__()
+_, input_img, _, _ = image_loader.__next__()
+input_img = input_img.astype(np.float)
+input_img /= 255.0
+input_img = np.expand_dims(input_img, axis=0)
 
 
 def GiB(val):
@@ -31,13 +43,25 @@ def load_model():
 
 
 def export_onnx(model, batch_size):
-    img = torch.zeros((batch_size, 3, 640, 640)).to(device)
+    _,_,x,y = input_img.shape
+    img = torch.zeros((batch_size, 3, x, y)).to(device)
     torch.onnx.export(model, (img), 'yolov5_{}.onnx'.format(batch_size), 
            input_names=["data"], output_names=["model/22"], verbose=True, opset_version=10, operator_export_type=torch.onnx.OperatorExportTypes.ONNX
     )
 
 
+def simplify_onnx(onnx_path):
+    model = onnx.load(onnx_path)
+    model_simp, check = simplify(model)
+    assert check, "Simplified ONNX model could not be validated"
+    onnx.save(model_simp, onnx_path)
+
+
 def build_engine(onnx_path, using_half):
+    engine_file = onnx_path.replace(".onnx", ".engine")
+    if os.path.exists(engine_file):
+        with open(engine_file, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
+            return runtime.deserialize_cuda_engine(f.read())
     with trt.Builder(TRT_LOGGER) as builder, builder.create_network(EXPLICIT_BATCH) as network, trt.OnnxParser(network, TRT_LOGGER) as parser:
         builder.max_batch_size = 1 # always 1 for explicit batch
         config = builder.create_builder_config()
@@ -96,8 +120,6 @@ def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
     yolo_inputs, yolo_outputs, yolo_bindings = allocate_buffers(engine, True)
     
     stream = cuda.Stream()    
-
-
     with engine.create_execution_context() as context:
         
         total_duration = 0.
@@ -107,7 +129,8 @@ def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
         for iteration in range(num_iters):
             pre_t = time.time()
             # set host data
-            img = torch.zeros((batch_size, 3, 640, 640)).numpy()
+            #img = torch.zeros((batch_size, 3, 640, 640)).numpy()
+            img = torch.from_numpy(input_img).float().numpy()
             yolo_inputs[0].host = img
             [cuda.memcpy_htod_async(inp.device, inp.host, stream) for inp in yolo_inputs]
             stream.synchronize()
@@ -133,6 +156,9 @@ def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
         print("avg GPU compute time: {}".format(total_compute_duration/(num_iters - num_warmups)))
         print("avg pre time: {}".format(total_pre_duration/(num_iters - num_warmups)))
         print("avg post time: {}".format(total_post_duration/(num_iters - num_warmups)))
+        
+        return [np.array(yolo_outputs[0].host.reshape(1, -1, 85))]
+        
 
 
 def profile_torch(model, using_half, batch_size, num_warmups=10, num_iters=100):
@@ -145,14 +171,14 @@ def profile_torch(model, using_half, batch_size, num_warmups=10, num_iters=100):
     for iteration in range(num_iters):
         pre_t = time.time()
         # set host data
-        img = torch.zeros((batch_size, 3, 640, 640)).to(device)
+        #img = torch.zeros((batch_size, 3, 640, 640)).to(device)
+        img = torch.from_numpy(input_img).float().to(device)
         if using_half:
             img = img.half()
         start_t = time.time()
         _ = model(img)
         end_t = time.time()
-        _[0].cpu()
-        [i.cpu() for i in _[1]]
+        [i.cpu() for i in _]
         post_t = time.time()
 
         duration = post_t - pre_t
@@ -169,16 +195,27 @@ def profile_torch(model, using_half, batch_size, num_warmups=10, num_iters=100):
     print("avg GPU compute time: {}".format(total_compute_duration/(num_iters - num_warmups)))
     print("avg pre time: {}".format(total_pre_duration/(num_iters - num_warmups)))
     print("avg post time: {}".format(total_post_duration/(num_iters - num_warmups)))
+    
+    return [i.cpu().numpy() for i in _]
 
 
 if __name__ == '__main__':
     batch_size = 1
     using_half = False
-    model = load_model()
-    export_onnx(model, batch_size)
+    onnx_path = 'yolov5_{}.onnx'.format(batch_size)
 
-    profile_trt(build_engine('yolov5_{}.onnx'.format(batch_size), using_half), batch_size)
-    if using_half:
-        model.half()
-    profile_torch(model, using_half, batch_size)
+    with torch.no_grad():
+        model = load_model()
+        export_onnx(model, batch_size)
+        simplify_onnx(onnx_path)
+
+        trt_result = profile_trt(build_engine(onnx_path, using_half), batch_size, 10, 100)
+        if using_half:
+            model.half()
+        torch_result = profile_torch(model, using_half, batch_size, 10, 100)
+
+        # check numerical correctness
+        for a, b in zip(trt_result, torch_result):
+            diff = abs(a-b)
+            print("max diff ", np.max(diff))
     
