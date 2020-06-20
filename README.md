@@ -2,7 +2,8 @@
 A tensorrt implementation of yolov5: https://github.com/ultralytics/yolov5
 
 # requirement
-Please use torch==1.4.0 + onnx==1.6.0 + TRT 6.0+ to run the sample code.
+Please use torch==1.4.0 + onnx==1.6.0 + TRT 7.0+ to run the sample code  
+onnx-simplifier-0.2.9
 
 # The code
 Add newly implemented upsample to get this working with current combination of onnx and tensorrt.  
