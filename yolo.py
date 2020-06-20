@@ -37,7 +37,7 @@ class Detect(nn.Module):
                 #y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
                 t0 = (y[..., 0:2] * 2. - 0.5 + self.grid[i].to(x[i].device)) * self.stride[i]
                 t1 = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]
-                y = torch.cat([t0, t1, y[...,4:]], -1)
+                y = torch.cat([t0, t1.float(), y[...,4:].float()], -1)
                 z.append(y.view(bs, -1, self.no))
 
         return x if self.training else [torch.cat(z, 1)]
