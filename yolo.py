@@ -35,8 +35,6 @@ class Detect(nn.Module):
                 y = x[i].sigmoid()
                 #y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i].to(x[i].device)) * self.stride[i]  # xy
                 #y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
-                z.append(y.view(bs, -1, self.no))
-
                 t0 = (y[..., 0:2] * 2. - 0.5 + self.grid[i].to(x[i].device)) * self.stride[i]
                 t1 = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]
                 y = torch.cat([t0, t1, y[...,4:]], -1)
