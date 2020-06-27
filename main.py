@@ -114,7 +114,7 @@ def allocate_buffers(engine, is_explicit_batch=False, dynamic_shapes=[]):
     return inputs, outputs, bindings
 
 
-def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
+def profile_trt(engine, batch_size, n_c = 85, num_warmups=10, num_iters=100):
     assert(engine is not None)
 
     yolo_inputs, yolo_outputs, yolo_bindings = allocate_buffers(engine, True)
@@ -157,7 +157,7 @@ def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
         print("avg pre time: {}".format(total_pre_duration/(num_iters - num_warmups)))
         print("avg post time: {}".format(total_post_duration/(num_iters - num_warmups)))
         
-        return [np.array(yolo_outputs[0].host.reshape(1, -1, 85))]
+        return [np.array(yolo_outputs[0].host.reshape(1, -1, n_c))]
         
 
 
@@ -203,13 +203,14 @@ if __name__ == '__main__':
     batch_size = 1
     using_half = False
     onnx_path = 'yolov5_{}.onnx'.format(batch_size)
+    n_c = 85 #(number of classes+5)
 
     with torch.no_grad():
         model = load_model()
         export_onnx(model, batch_size)
         simplify_onnx(onnx_path)
 
-        trt_result = profile_trt(build_engine(onnx_path, using_half), batch_size, 10, 100)
+        trt_result = profile_trt(build_engine(onnx_path, using_half), batch_size,n_c, 10, 100)
         if using_half:
             model.half()
         torch_result = profile_torch(model, using_half, batch_size, 10, 100)
