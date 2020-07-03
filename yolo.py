@@ -22,7 +22,7 @@ class Detect(nn.Module):
 
     def forward(self, x):
         # x = x.copy()  # for profiling
-        z = []  # inference output
+        preds = []  # inference output
         self.training |= self.export
         for i in range(self.nl):
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
@@ -37,15 +37,26 @@ class Detect(nn.Module):
                 #y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
                 t0 = (y[..., 0:2] * 2. - 0.5 + self.grid[i].to(x[i].device)) * self.stride[i]
                 t1 = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]
-                y = torch.cat([t0, t1.float(), y[...,4:].float()], -1)
-                z.append(y.view(bs, -1, self.no))
+                box_xyxy = self._xywh2xyxy(t0, t1).view(bs, -1, 4)
+                score = y[...,4:].float().view(bs, -1, self.nc+1)
 
-        return x if self.training else [torch.cat(z, 1)]
+                preds.append(torch.cat([box_xyxy, score], -1))
+
+        return x if self.training else [torch.cat(preds, 1)]
 
     @staticmethod
     def _make_grid(nx=20, ny=20):
         yv, xv = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
         return torch.stack((xv, yv), 2).view((1, 1, ny, nx, 2)).float()
+
+    @staticmethod
+    def _xywh2xyxy(t0, t1):
+        # Convert nx4 boxes from [x, y, w, h] to [x1, y1, x2, y2] where xy1=top-left, xy2=bottom-right
+        t = t1 / 2
+        x0 = t0 - t
+        x1 = t0 + t
+
+        return torch.cat([x0, x1], -1)
 
 
 class Model(nn.Module):
