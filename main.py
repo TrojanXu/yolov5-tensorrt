@@ -145,7 +145,7 @@ def export_onnx(model, batch_size):
     _,_,x,y = input_img.shape
     img = torch.zeros((batch_size, 3, x, y)).to(device)
     torch.onnx.export(model, (img), 'yolov5_{}.onnx'.format(batch_size), 
-           input_names=["data"], output_names=["prediction"], verbose=True, opset_version=10, operator_export_type=torch.onnx.OperatorExportTypes.ONNX
+           input_names=["data"], output_names=["prediction"], verbose=True, opset_version=11, operator_export_type=torch.onnx.OperatorExportTypes.ONNX
     )
 
 
