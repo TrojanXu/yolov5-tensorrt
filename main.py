@@ -157,6 +157,7 @@ def simplify_onnx(onnx_path):
 
 
 def build_engine(onnx_path, using_half):
+    trt.init_libnvinfer_plugins(None, '')
     engine_file = onnx_path.replace(".onnx", ".engine")
     if os.path.exists(engine_file):
         with open(engine_file, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
