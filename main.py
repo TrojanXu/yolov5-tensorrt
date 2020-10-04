@@ -16,8 +16,9 @@ from onnxsim import simplify
 import onnx
 import struct
 import yaml
+import torchvision
 
-device = torch_utils.select_device('0')
+device = select_device('0')
 weights = 'yolov5s.pt'
 model_config = 'yolov5s.yaml'
 TRT_LOGGER = trt.Logger(trt.Logger.INFO)
@@ -132,8 +133,8 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, merge=False, 
 
 def load_model():
     # Load model
-    model = Model(model_config).to(device)
-    ckpt = torch.load(weights, map_location=device)
+    model = Model(model_config)
+    ckpt = torch.load(weights, map_location=torch.device('cpu'))
     ckpt['model'] = \
                 {k: v for k, v in ckpt['model'].state_dict().items() if model.state_dict()[k].numel() == v.numel()}
     model.load_state_dict(ckpt['model'], strict=False)
@@ -143,7 +144,7 @@ def load_model():
 
 def export_onnx(model, batch_size):
     _,_,x,y = input_img.shape
-    img = torch.zeros((batch_size, 3, x, y)).to(device)
+    img = torch.zeros((batch_size, 3, x, y))
     torch.onnx.export(model, (img), 'yolov5_{}.onnx'.format(batch_size), 
            input_names=["data"], output_names=["prediction"], verbose=True, opset_version=11, operator_export_type=torch.onnx.OperatorExportTypes.ONNX
     )
@@ -271,7 +272,8 @@ def allocate_buffers(engine, is_explicit_batch=False, dynamic_shapes=[]):
 
 
 def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
-    assert(engine is not None)
+    assert(engine is not None)  
+    input_img_array = np.array([input_img] * batch_size)
 
     yolo_inputs, yolo_outputs, yolo_bindings = allocate_buffers(engine, True)
     
@@ -285,7 +287,7 @@ def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
         for iteration in range(num_iters):
             pre_t = time.time()
             # set host data
-            img = torch.from_numpy(input_img).float().numpy()
+            img = torch.from_numpy(input_img_array).float().numpy()
             yolo_inputs[0].host = img
             [cuda.memcpy_htod_async(inp.device, inp.host, stream) for inp in yolo_inputs]
             stream.synchronize()
@@ -312,15 +314,18 @@ def profile_trt(engine, batch_size, num_warmups=10, num_iters=100):
         print("avg pre time: {}".format(total_pre_duration/(num_iters - num_warmups)))
         print("avg post time: {}".format(total_post_duration/(num_iters - num_warmups)))
         
-        num_det = int(yolo_outputs[0].host)
-        boxes = np.array(yolo_outputs[1].host.reshape(1, -1, 4))[:, 0:num_det, :]
-        scores = np.array(yolo_outputs[2].host.reshape(1, -1, 1))[:, 0:num_det, :]
-        classes = np.array(yolo_outputs[3].host.reshape(1, -1, 1))[:, 0:num_det, :]
+        num_det = int(yolo_outputs[0].host[0, ...])
+        boxes = np.array(yolo_outputs[1].host).reshape(batch_size, -1, 4)[0, 0:num_det, 0:4]
+        scores = np.array(yolo_outputs[2].host).reshape(batch_size, -1, 1)[0, 0:num_det, 0:1]
+        classes = np.array(yolo_outputs[3].host).reshape(batch_size, -1, 1)[0, 0:num_det, 0:1]
         
         return [np.concatenate([boxes, scores, classes], -1)]
 
 
 def profile_torch(model, using_half, batch_size, num_warmups=10, num_iters=100):
+
+    model.to(device)
+    
     total_duration = 0.
     total_compute_duration = 0.
     total_pre_duration = 0.
@@ -359,7 +364,7 @@ def profile_torch(model, using_half, batch_size, num_warmups=10, num_iters=100):
 
 
 if __name__ == '__main__':
-    batch_size = 1
+    batch_size = 1 # only works for TRT. perf reported by torch is working on non-batched data.
     using_half = False
     onnx_path = 'yolov5_{}.onnx'.format(batch_size)
     
